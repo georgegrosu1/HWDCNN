@@ -1,0 +1,7 @@
+numpy
+tqdm
+matplotlib
+scikit-image
+opencv-python
+tensorflow==2.9.1
+tensorflow-addons
