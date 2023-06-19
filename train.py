@@ -37,7 +37,7 @@ def get_saving_model_path(configs, model_name: str):
 
 
 def get_x_y_paths(configs, mode='train'):
-    x_path = get_abs_path(configs['train_cfg']['dataset_root']) / mode / 'x_set_17_std-2p0'
+    x_path = get_abs_path(configs['train_cfg']['dataset_root']) / mode / 'x_set_17_std-2p4'
     y_path = get_abs_path(configs['train_cfg']['dataset_root']) / mode / 'y_set'
 
     return x_path, y_path
@@ -65,9 +65,11 @@ def train_dcnn(json_cfg, model_name, use_pretrained=False):
     if use_pretrained:
         pretrained_path = get_abs_path(json_cfg['train_cfg']['pretrained_model_path'])
         model = build_deblurring_second_model(json_cfg['train_cfg']['x_shape'],
-                                       pretrained_path=pretrained_path)
+                                              batch_size=json_cfg['train_cfg']['batch_size'],
+                                              pretrained_path=pretrained_path)
     else:
-        model = build_deblurring_second_model(json_cfg['train_cfg']['x_shape'])
+        model = build_deblurring_second_model(json_cfg['train_cfg']['x_shape'],
+                                              batch_size=json_cfg['train_cfg']['batch_size'])
 
     reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.3, patience=3, min_lr=0.0000001)
 
@@ -107,7 +109,7 @@ def main():
     args_parser.add_argument('--config_path', '-c', type=str, help='Path to config file',
                              default=r'/configs/dcnn_train.json')
     args_parser.add_argument('--model_name', '-n', type=str, help='Path to model',
-                             default=r'x_set_17_std-2p0_dcnn_256')
+                             default=r'x_set_17_std-2p4_dcnn_256')
     args = args_parser.parse_args()
 
     init_training(args.config_path, args.model_name)

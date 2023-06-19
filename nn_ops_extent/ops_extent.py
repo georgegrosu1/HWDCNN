@@ -26,7 +26,7 @@ def expand_tensor_dims_recursive(inputs, expand_iters=1, axis=0):
     if expand_iters == 1:
         return tf.expand_dims(inputs, axis)
     inputs = tf.expand_dims(inputs, axis)
-    return expand_tensor_dims_recursive(inputs, expand_iters-1, axis)
+    return expand_tensor_dims_recursive(inputs, expand_iters - 1, axis)
 
 
 @tf.function
@@ -61,7 +61,8 @@ def deconv1d(input_vect, filters, lambds):
     fft_input = tf.signal.fft(input_vect)
     # Compute simple Wiener deconvolution
     deconvolved = tf.math.real(tf.signal.ifft(outer_elementwise(fft_input, (tf.math.conj(fft_filters) /
-                                              (fft_filters * tf.math.conj(fft_filters) + lambds**2)),
+                                                                            (fft_filters * tf.math.conj(
+                                                                                fft_filters) + lambds ** 2)),
                                                                 perm_order=(0, 2, 1))))
     # Reshape the resulted deconvoluted maps to normal shape of (batch, timestamps, features) where number of features
     # now is the product of initial features times the number of deconvolution filters (from each independent signal
@@ -91,26 +92,14 @@ def deconv2d(input_mat, filters, lambds):
     # Generate the FFT of filter's transfer function and input matrixes
     fft_filters = tf.signal.fft2d(filters)
     fft_input = tf.signal.fft2d(input_mat)
-    input_mat = None
 
-    # Compute simple Wiener deconvolution method 1 kinda deprecated
-    # Match SNRs & filters shape
-    # lambds = real_to_complex_tensor(lambds)
-    # lambds = tf.broadcast_to(lambds[:, None], (tf.shape(lambds)[0], tf.shape(input_mat)[1], tf.shape(input_mat)[2]))
-    # deconvolved = tf.math.real(tf.signal.ifft2d(outer_elementwise(fft_input, (tf.math.conj(fft_filters) /
-    #                                                                          (fft_filters * tf.math.conj(fft_filters) +
-    #                                                                           lambds ** 2)), perm_order=(0, 1, 2, 3))))
-    # deconvolved = tf.reshape(deconvolved, (tf.shape(deconvolved)[1],
-    #                                                    tf.shape(deconvolved)[0] * tf.shape(deconvolved)[2],
-    #                                                    tf.shape(deconvolved)[3],
-    #                                                    tf.shape(deconvolved)[4]))
-
+    # Compute simple Wiener deconvolution
     input_snr = tf.reduce_mean(tf.abs(fft_input) ** 2) / lambds
     input_snr = tf.broadcast_to(input_snr[:, None, None], (fft_filters.shape[0],
                                                            fft_filters.shape[1],
                                                            fft_filters.shape[2]))
 
-    g_right_hand = (1 / (1 + 1 / ((tf.abs(fft_filters)**2) * input_snr)))
+    g_right_hand = (1 / (1 + 1 / ((tf.math.real(fft_filters) ** 2) * input_snr)))
     g_right_hand = tf.cast(g_right_hand, tf.complex64)
 
     g_freq_domain = (1 / fft_filters) * g_right_hand
@@ -127,3 +116,74 @@ def deconv2d(input_mat, filters, lambds):
     deconvolved = tf.transpose(deconvolved, perm=(0, 2, 3, 1))
 
     return deconvolved
+
+
+@tf.function
+def denoise_tv_chambolle_nd(image, weights, max_num_iter=200, regularization_term=1e-6):
+    """Perform total-variation denoising on n-dimensional images based on Rudin, Osher and Fatemi algorithm..
+    ----------
+    :param image : ndarray; n-D input data to be denoised.
+    :param weights: 1D tensor with the weights for each channel; Denoising weight. The greater `weight`, the more
+    denoising (at the expense of fidelity to `input`).
+    :param max_num_iter : int Maximal number of iterations used for the optimization.
+    :param regularization_term: Float value to ensure differentiability of norm factor in equation
+    tf.sqrt(tf.reduce_sum(g ** 2 + regularization_term, axis=0))
+    :return out : ndarray; Denoised array of floats.
+    ----------
+    """
+    assert weights.shape[0] == image.shape[-1] or weights.shape[0] == 1 or weights.shape == image.shape[1:], \
+        'Weights must have same size 1, equal with number of image channels, or same shape as the image (without batch)'
+
+    input_shape = image.get_shape()
+    ndim = input_shape.ndims
+    assert ndim == 3 or ndim == 4, 'Input image must have either 3 (single image) or 4 (batch of images) dimensions'
+
+    if ndim == 3:
+        image = image[None, ...]
+        input_shape = image.get_shape()
+        ndim = input_shape.ndims
+
+    p_shape = tf.TensorShape([input_shape[0], ndim - 1, input_shape[1], input_shape[2], input_shape[-1]])
+
+    p = tf.zeros(p_shape, dtype=image.dtype)
+    out = tf.zeros_like(image)
+
+    for i in tf.range(max_num_iter):
+        if i > 0:
+            # d will be the (negative) divergence of p
+            d = tf.reduce_sum(-p, 1)
+
+            d_p_ax0 = d[:, 1:, :, :] + p[:, 0, :-1, :, :]
+            d = tf.concat([d[:, :1, :, :], d_p_ax0], axis=1)
+
+            d_p_ax1 = d[:, :, 1:, :] + p[:, 1, :, :-1, :]
+            d = tf.concat([d[:, :, :1, :], d_p_ax1], axis=2)
+
+            d_p_ax2 = d[:, :, :, 1:] + p[:, 2, :, :, :-1]
+            d = tf.concat([d[:, :, :, :1], d_p_ax2], axis=3)
+
+            out = image + d * tf.cast((i != 0), d.dtype)
+
+        # g stores the gradients of out along each axis of the image (1, 2, 3)
+        diff_g_ax0 = tf.experimental.numpy.diff(out, axis=1)
+        diff_g_ax0 = tf.pad(diff_g_ax0, [[0, 0], [0, 1], [0, 0], [0, 0]])
+
+        diff_g_ax1 = tf.experimental.numpy.diff(out, axis=2)
+        diff_g_ax1 = tf.pad(diff_g_ax1, [[0, 0], [0, 0], [0, 1], [0, 0]])
+
+        diff_g_ax2 = tf.experimental.numpy.diff(out, axis=3)
+        diff_g_ax2 = tf.pad(diff_g_ax2, [[0, 0], [0, 0], [0, 0], [0, 1]])
+
+        g = tf.concat([[diff_g_ax0], [diff_g_ax1], [diff_g_ax2]], axis=0)
+
+        # Dimensions order must be rearranged
+        g = tf.transpose(g, perm=[1, 0, 2, 3, 4])
+
+        norm = tf.sqrt(tf.reduce_sum(g ** 2 + regularization_term ** 2, axis=0))[tf.newaxis, ...]
+        tau = 1. / (2. * p_shape[1])
+        norm *= tau / weights ** 2
+        norm += 1.
+        p = p - tau * g
+        p = p / norm
+
+    return out

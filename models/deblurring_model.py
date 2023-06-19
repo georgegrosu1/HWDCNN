@@ -2,11 +2,11 @@ from typing import Optional, Union, Callable, List
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import backend as B
-from tf_layers_extended import Deconv2D
+from tf_layers_extended import WienerDeconv2D, TVDeconv2D
 
 
-def psnr_loss_new(y_true, y_pred):
-    mse = B.mean((y_true - y_pred) ** 2.0)
+def peak_snr(y_true, y_pred):
+    mse = tf.experimental.numpy.mean((y_true - y_pred) ** 2.0)
     if mse == 0.0:  # MSE is zero means no noise is present in the signal .
         # Therefore PSNR have no importance.
         return 100.0
@@ -17,33 +17,20 @@ def psnr_loss_new(y_true, y_pred):
     return psnr
 
 
-def psnr_loss(y_true, y_pred):
-    """
-    PSNR is Peek Signal to Noise Ratio, which is similar to mean squared error.
-    It can be calculated as
-    PSNR = 20 * log10(MAXp) - 10 * log10(MSE)
-    When providing an unscaled input, MAXp = 255. Therefore 20 * log10(255)== 48.1308036087.
-    However, since we are scaling our input, MAXp = 1. Therefore 20 * log10(1) = 0.
-    Thus we remove that component completely and only compute the remaining MSE component.
-    """
-
-    return -10. * tf.experimental.numpy.log10(tf.experimental.numpy.mean(tf.experimental.numpy.square(y_pred - y_true)))
-
-
 def mse_ssim(y_true, y_pred):
     mse = tf.keras.losses.MeanSquaredError()
 
-    return mse(y_true, y_pred) * (B.exp(B.exp(ssim(y_true, y_pred))) - tf.experimental.numpy.e) * (40 / psnr_loss_new(y_true, y_pred))
+    return mse(y_true, y_pred) * (B.exp(B.exp(ssim(y_true, y_pred))) - tf.experimental.numpy.e) * (40 / peak_snr(y_true, y_pred))
 
 
 def ssim(y_true, y_pred):
-    loss_rec = B.mean(tf.image.ssim(y_true, y_pred, max_val=255.0))
+    loss_rec = tf.image.ssim(y_true, y_pred, max_val=255.0)
 
     return 1 - loss_rec
 
 
 def ms_ssim(y_true, y_pred):
-    loss_rec = B.mean(tf.image.ssim_multiscale(y_true, y_pred, max_val=255.0))
+    loss_rec = tf.image.ssim_multiscale(y_true, y_pred, max_val=255.0)[..., None]
 
     return 1 - loss_rec
 
@@ -71,10 +58,10 @@ def build_deblurring_model(input_shape,
 
     inputs = tf.keras.layers.Input(shape=input_shape)
     if pretrained_path is not None:
-        base_model = tf.keras.models.load_model(pretrained_path, custom_objects={'Deconvolution2D': Deconv2D,
-                                                                                 'psnr_loss': psnr_loss,
-                                                                                 'psnr_loss_new': psnr_loss_new,
-                                                                                 'ms_ssim': ms_ssim})
+        base_model = tf.keras.models.load_model(pretrained_path, custom_objects={
+            'WienerDeconvolution2D': WienerDeconv2D,
+            'peak_snr': peak_snr,
+            'ms_ssim': ms_ssim})
         base_model.trainable = False
 
         x = base_model(inputs, training=False)
@@ -82,7 +69,7 @@ def build_deblurring_model(input_shape,
         x = inputs
 
     # First branch
-    deconv_1 = Deconv2D(filters=2, kernel_size=input_shape, padding=((0, 0), (0, 0)))(x)
+    deconv_1 = WienerDeconv2D(filters=2, kernel_size=input_shape, padding=((0, 0), (0, 0)))(x)
     # batch_11 = tf.keras.layers.BatchNormalization()(deconv_1)
     # rel11 = tf.keras.layers.ReLU()(batch_11)
     deconv_conv_1 = tf.keras.layers.Conv2DTranspose(filters=16, kernel_size=3, strides=(1, 1))(deconv_1)
@@ -96,7 +83,8 @@ def build_deblurring_model(input_shape,
     rel_1_3 = tf.keras.layers.ReLU()(norm_1_3)
 
     # Second branch
-    conv2d_1 = tf.keras.layers.Conv2DTranspose(filters=32, kernel_size=8, strides=(1, 1))(x)
+    tvdeconv = TVDeconv2D(150, 'unit')(x)
+    conv2d_1 = tf.keras.layers.Conv2DTranspose(filters=32, kernel_size=8, strides=(1, 1))(tvdeconv)
     norm_2_1 = tf.keras.layers.Normalization()(conv2d_1)
     rel_2_1 = tf.keras.layers.ReLU()(norm_2_1)
     conv2d_2 = tf.keras.layers.Conv2DTranspose(filters=64, kernel_size=12, strides=(1, 1))(rel_2_1)
@@ -120,7 +108,7 @@ def build_deblurring_model(input_shape,
     else:
         final_model = tf.keras.Model(inputs=x, outputs=sum_fin)
 
-    final_model.compile(loss=loss, metrics=['mse', psnr_loss_new], optimizer=optimizer)
+    final_model.compile(loss=loss, metrics=['mse', peak_snr], optimizer=optimizer)
     final_model.summary()
 
     return final_model
@@ -140,11 +128,11 @@ def build_autoencoder_model(input_shape,
 
     inputs = tf.keras.layers.Input(shape=input_shape)
     if pretrained_path is not None:
-        base_model = tf.keras.models.load_model(pretrained_path, custom_objects={'Deconvolution2D': Deconv2D,
-                                                                                 'psnr_loss': psnr_loss,
-                                                                                 'psnr_loss_new': psnr_loss_new,
-                                                                                 'ms_ssim': ms_ssim,
-                                                                                 'ssim': ssim})
+        base_model = tf.keras.models.load_model(pretrained_path, custom_objects={
+            'WienerDeconvolution2D': WienerDeconv2D,
+            'peak_snr': peak_snr,
+            'ms_ssim': ms_ssim,
+            'ssim': ssim})
         base_model.trainable = False
 
         x_in = base_model(inputs, training=False)
@@ -152,13 +140,14 @@ def build_autoencoder_model(input_shape,
         x_in = inputs
 
     # 1 downscale branch
-    x_in_1_down = tf.keras.layers.Conv2D(filters=32, kernel_size=2, strides=(1, 1))(x_in)
+    tvdeconv_1 = TVDeconv2D(150, 'unit')(x_in)
+    x_in_1_down = tf.keras.layers.Conv2D(filters=32, kernel_size=2, strides=(1, 1))(tvdeconv_1)
     x_in_1_down = tf.keras.layers.Normalization()(x_in_1_down)
     x_in_1_down = tf.keras.layers.ReLU()(x_in_1_down)
 
     # 2 downscale branch
-    x_in_2_down = Deconv2D(filters=2, kernel_size=input_shape, padding=((0, 0), (0, 0)),
-                           kernel_initializer=tf.keras.initializers.TruncatedNormal(mean=100., stddev=50.))(x_in)
+    x_in_2_down = WienerDeconv2D(filters=2, kernel_size=input_shape, padding=((0, 0), (0, 0)),
+                                 kernel_initializer=tf.keras.initializers.TruncatedNormal(mean=100., stddev=50.))(x_in)
     x_in_2_down = tf.keras.layers.Normalization()(x_in_2_down)
     x_in_2_down = tf.keras.layers.ReLU()(x_in_2_down)
 
@@ -167,12 +156,13 @@ def build_autoencoder_model(input_shape,
     x_in_2_down = tf.keras.layers.ReLU()(x_in_2_down)
 
     # 3 downscale branch
-    x_in_3_down = tf.keras.layers.Conv2D(filters=32, kernel_size=2, strides=(1, 1))(x_in)
+    tvdeconv_3 = TVDeconv2D(150, 'unit')(x_in)
+    x_in_3_down = tf.keras.layers.Conv2D(filters=32, kernel_size=2, strides=(1, 1))(tvdeconv_3)
     x_in_3_down = tf.keras.layers.Normalization()(x_in_3_down)
     x_in_3_down = tf.keras.layers.ReLU()(x_in_3_down)
 
     # 4 downscale branch
-    x_in_4_down = Deconv2D(filters=2, kernel_size=input_shape, padding=((0, 0), (0, 0)),
+    x_in_4_down = WienerDeconv2D(filters=2, kernel_size=input_shape, padding=((0, 0), (0, 0)),
                                  kernel_initializer=tf.keras.initializers.TruncatedNormal(mean=100., stddev=50.))(x_in)
     x_in_4_down = tf.keras.layers.Normalization()(x_in_4_down)
     x_in_4_down = tf.keras.layers.ReLU()(x_in_4_down)
@@ -252,13 +242,14 @@ def build_autoencoder_model(input_shape,
     else:
         final_model = tf.keras.Model(inputs=x_in, outputs=all_ups_concat)
 
-    final_model.compile(loss=loss, metrics=[ms_ssim, ssim, 'mse', psnr_loss_new], optimizer=optimizer)
+    final_model.compile(loss=loss, metrics=[ms_ssim, ssim, 'mse', peak_snr], optimizer=optimizer)
     final_model.summary()
 
     return final_model
 
 
 def build_deblurring_second_model(input_shape,
+                                  batch_size,
                                   loss=ssim,
                                   optimizer=None,
                                   pretrained_path=None):
@@ -271,13 +262,13 @@ def build_deblurring_second_model(input_shape,
                                              epsilon=1e-8,
                                              clipvalue=2)
 
-    inputs = tf.keras.layers.Input(shape=input_shape)
+    inputs = tf.keras.layers.Input(shape=input_shape, batch_size=batch_size)
     if pretrained_path is not None:
-        base_model = tf.keras.models.load_model(pretrained_path, custom_objects={'Deconvolution2D': Deconv2D,
-                                                                                 'psnr_loss': psnr_loss,
-                                                                                 'psnr_loss_new': psnr_loss_new,
-                                                                                 'ms_ssim': ms_ssim,
-                                                                                 'ssim': ssim})
+        base_model = tf.keras.models.load_model(pretrained_path, custom_objects={
+            'WienerDeconvolution2D': WienerDeconv2D,
+            'peak_snr': peak_snr,
+            'ms_ssim': ms_ssim,
+            'ssim': ssim})
         base_model.trainable = False
 
         x_in = base_model(inputs, training=False)
@@ -285,7 +276,8 @@ def build_deblurring_second_model(input_shape,
         x_in = inputs
 
     # First downscale branch
-    x_in_1_down = tf.keras.layers.Conv2D(filters=32, kernel_size=2, strides=(1, 1))(x_in)
+    tvdeconv_1 = TVDeconv2D(150, 'channel', activation='relu')(x_in)
+    x_in_1_down = tf.keras.layers.Conv2D(filters=32, kernel_size=2, strides=(1, 1))(tvdeconv_1)
     x_in_1_down = tf.keras.layers.Normalization()(x_in_1_down)
     x_in_1_down = tf.keras.layers.ReLU()(x_in_1_down)
     x_in_1_down = tf.keras.layers.MaxPooling2D(pool_size=(2, 2), strides=(1, 1), padding='same')(x_in_1_down)
@@ -301,8 +293,8 @@ def build_deblurring_second_model(input_shape,
     x_in_1_down = tf.keras.layers.MaxPooling2D(pool_size=(5, 5), strides=(1, 1), padding='same')(x_in_1_down)
 
     # Second downscale branch
-    x_in_2_down = Deconv2D(filters=1, kernel_size=input_shape, padding=((0, 0), (0, 0)),
-                           kernel_initializer=tf.keras.initializers.TruncatedNormal(mean=150., stddev=90.))(x_in)
+    x_in_2_down = WienerDeconv2D(filters=1, kernel_size=input_shape, padding=((0, 0), (0, 0)),
+                                 kernel_initializer=tf.keras.initializers.TruncatedNormal(mean=150., stddev=90.))(x_in)
     x_in_2_down = tf.keras.layers.Normalization()(x_in_2_down)
     x_in_2_down = tf.keras.layers.ReLU()(x_in_2_down)
     x_in_2_down = tf.keras.layers.Conv2D(filters=32, kernel_size=4, strides=(1, 1))(x_in_2_down)
@@ -336,6 +328,7 @@ def build_deblurring_second_model(input_shape,
     # x_in_3d_down = Deconv2D(filters=1, kernel_size=input_shape, padding=((0, 0), (0, 0)))(x_in_3d_down)
 
     # Fourth downscale branch
+    # tvdeconv_4 = TVDeconv2D(150, 'unit')(x_in)
     x_in_4_down = tf.keras.layers.Conv2D(filters=32, kernel_size=8, strides=(1, 1))(x_in)
     x_in_4_down = tf.keras.layers.Normalization()(x_in_4_down)
     x_in_4_down = tf.keras.layers.ReLU()(x_in_4_down)
@@ -476,8 +469,8 @@ def build_deblurring_second_model(input_shape,
     span_xin = tf.keras.layers.Normalization()(span_xin)
     span_xin = tf.keras.layers.ReLU()(span_xin)
 
-    adds135 = tf.keras.layers.Add()([x_in_1_up, x_in_3_up, x_in_5_up])
-    adds246 = tf.keras.layers.Add()([x_in_2_up, x_in_4_up, x_in_6_up])
+    # adds135 = tf.keras.layers.Add()([x_in_1_up, x_in_3_up, x_in_5_up])
+    # adds246 = tf.keras.layers.Add()([x_in_2_up, x_in_4_up, x_in_6_up])
     all_concat = tf.keras.layers.concatenate([x_in_1_up, x_in_2_up, x_in_3_up, x_in_4_up, x_in_5_up, x_in_6_up, span_xin])
     all_concat = tf.keras.layers.Conv2D(filters=3, kernel_size=9, strides=(1, 1))(all_concat)
     all_concat = tf.keras.layers.Normalization()(all_concat)
@@ -490,7 +483,7 @@ def build_deblurring_second_model(input_shape,
     else:
         final_model = tf.keras.Model(inputs=x_in, outputs=all_concat)
 
-    final_model.compile(loss=loss, metrics=[ms_ssim, ssim, 'mse', psnr_loss_new], optimizer=optimizer)
+    final_model.compile(loss=loss, metrics=[ms_ssim, ssim, 'mse', peak_snr], optimizer=optimizer)
     final_model.summary()
 
     return final_model
@@ -631,7 +624,7 @@ def build_unet_model(nx: Optional[int] = None,
     """
 
     inputs = tf.keras.Input(shape=(nx, ny, channels), name="inputs")
-    deconv_1 = Deconv2D(filters=1, kernel_size=(nx, ny), padding=((0, 0), (0, 0)))(inputs)
+    deconv_1 = WienerDeconv2D(filters=1, kernel_size=(nx, ny), padding=((0, 0), (0, 0)))(inputs)
 
     x = inputs
     contracting_layers = {}
@@ -690,7 +683,7 @@ def _get_kernel_initializer(filters, kernel_size):
 def finalize_model(model: tf.keras.Model,
                    loss=ms_ssim,
                    optimizer: Optional = None,
-                   metrics=('mse', psnr_loss_new),
+                   metrics=('mse', peak_snr),
                    **opt_kwargs):
     """
     Configures the model for training by setting, loss, optimzer, and tracked metrics

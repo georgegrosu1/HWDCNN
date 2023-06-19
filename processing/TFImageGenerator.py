@@ -39,7 +39,7 @@ class TFImageGenerator(tf.keras.utils.Sequence):
             self.on_epoch_end()
 
     def __len__(self):
-        return int(np.ceil(self.x_data.shape[-1] / self.batch_size))
+        return int(self.x_data.shape[-1] // self.batch_size)
 
     def __getitem__(self, idx):
         batch_x = self.x_data[idx * self.batch_size:(idx + 1) * self.batch_size]
@@ -48,10 +48,18 @@ class TFImageGenerator(tf.keras.utils.Sequence):
         batch_x_data = []
         batch_y_data = []
         for fidx in range(len(batch_x)):
-            wp = np.random.randint(0, 1280 - 256)
-            hp = np.random.randint(0, 720 - 256)
-            batch_x_data.append(cv2.imread(str(batch_x[fidx]))[hp:(hp+256), wp:(wp+256), :])
-            batch_y_data.append(cv2.imread(str(batch_y[fidx]))[hp:(hp+256), wp:(wp+256), :])
+            x_img = cv2.imread(str(batch_x[fidx]))
+            y_img = cv2.imread(str(batch_y[fidx]))
+
+            if self.x_shape != x_img.shape:
+                hp = np.random.randint(0, x_img.shape[0] - self.x_shape[0])
+                wp = np.random.randint(0, x_img.shape[1] - self.x_shape[1])
+
+                x_img = x_img[hp:hp+self.x_shape[0], wp:wp+self.x_shape[1], :]
+                y_img = y_img[hp:hp + self.x_shape[0], wp:wp + self.x_shape[1], :]
+
+            batch_x_data.append(x_img)
+            batch_y_data.append(y_img)
 
         if self.normalize is not None:
             batch_x_data = self.normalize_img(batch_x_data)

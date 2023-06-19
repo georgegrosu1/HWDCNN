@@ -1,5 +1,3 @@
-import copy
-
 import tensorflow as tf
 from tensorflow.keras import backend as bend
 from tensorflow.keras import initializers
@@ -8,7 +6,7 @@ from tensorflow.keras import activations
 from nn_ops_extent import deconv1d, deconv2d
 
 
-class AbstractDeconvolution(tf.keras.layers.Layer):
+class WienerAbstractDeconvolution(tf.keras.layers.Layer):
     def __init__(self,
                  filters,
                  kernel_size,
@@ -37,7 +35,7 @@ class AbstractDeconvolution(tf.keras.layers.Layer):
         self.bias_regularizer = regularizers.get(bias_regularizer)
         self.use_bias = use_bias
 
-        super(AbstractDeconvolution, self).__init__(
+        super(WienerAbstractDeconvolution, self).__init__(
             trainable=trainable,
             name=name,
             activity_regularizer=regularizers.get(activity_regularizer),
@@ -74,7 +72,7 @@ class AbstractDeconvolution(tf.keras.layers.Layer):
         return config
 
 
-class Deconvolution1D(AbstractDeconvolution):
+class WienerDeconvolution1D(WienerAbstractDeconvolution):
     def __init__(self,
                  filters: int,
                  kernel_size: tuple,
@@ -91,7 +89,7 @@ class Deconvolution1D(AbstractDeconvolution):
                  trainable=True,
                  name=None,
                  **kwargs):
-        super(Deconvolution1D, self).__init__(
+        super(WienerDeconvolution1D, self).__init__(
             filters=filters,
             kernel_size=kernel_size,
             padding=padding,
@@ -143,7 +141,7 @@ class Deconvolution1D(AbstractDeconvolution):
 
     @tf.function
     def call(self, inputs, *args, **kwargs):
-        x = copy.copy(inputs)
+        x = tf.cast(inputs, dtype=tf.float32)
         # Make sure input shape corresponds to convention of (batch size, timestamps, features)
         assert bend.ndim(x) == 3, f'Inputs shape must be of form (batch size, #timestamps, #features, ' \
                                   f'yours is of form {bend.ndim(x)}'
@@ -177,7 +175,7 @@ class Deconvolution1D(AbstractDeconvolution):
             self.w_imag = tf.pad(self.w_imag, ((0, 0), (0, len_pad)), 'constant')
 
 
-class Deconvolution2D(AbstractDeconvolution):
+class WienerDeconvolution2D(WienerAbstractDeconvolution):
 
     def __init__(self,
                  filters: int,
@@ -195,7 +193,7 @@ class Deconvolution2D(AbstractDeconvolution):
                  trainable=True,
                  name=None,
                  **kwargs):
-        super(Deconvolution2D, self).__init__(
+        super(WienerDeconvolution2D, self).__init__(
             filters=filters,
             kernel_size=kernel_size,
             padding=padding,
@@ -231,7 +229,7 @@ class Deconvolution2D(AbstractDeconvolution):
                                  name='w',
                                  dtype='float32')
 
-        self.s = self.add_weight(shape=(self.filters, ),
+        self.s = self.add_weight(shape=(1, ),
                                  initializer=self.lambd_initializer,
                                  regularizer=self.lambd_regularizer,
                                  trainable=True,
@@ -247,29 +245,30 @@ class Deconvolution2D(AbstractDeconvolution):
 
     @tf.function
     def call(self, inputs, *args, **kwargs):
+        x = tf.cast(inputs, dtype=tf.float32)
         # Make sure input shape corresponds to convention of (batch size, height, width, channels)
-        assert bend.ndim(inputs) == 4, f'Inputs shape must be of form (batch size, width, height, channels)' \
-                                  f'yours is of form {bend.ndim(inputs)}'
+        assert bend.ndim(x) == 4, f'Inputs shape must be of form (batch size, width, height, channels)' \
+                                  f'yours is of form {bend.ndim(x)}'
 
         # Apply padding to input if specified
-        inputs = tf.pad(inputs,
+        x = tf.pad(x,
                    ((0, 0), (self.padding[0][0], self.padding[0][1]), (self.padding[1][0], self.padding[1][1]), (0, 0)),
                    'constant')
 
-        assert (inputs.shape[1] == self.w.shape[1]) and (inputs.shape[2] == self.w.shape[2]), \
+        assert (x.shape[1] == self.w.shape[1]) and (x.shape[2] == self.w.shape[2]), \
             'Input and kernels must have equal shapes. Reduce filters ' \
             'width/height, use input padding or increase input width/height.'
 
         # Perform Wiener deconvolution with trainable weights and SNRs
-        inputs = deconv2d(input_mat=inputs, filters=self.w, lambds=self.s)
+        x = deconv2d(input_mat=x, filters=self.w, lambds=self.s)
 
         # Apply bias accordingly to resulted shape
         if self.use_bias:
-            inputs = inputs + tf.broadcast_to(self.b, (tf.shape(inputs)[1], tf.shape(inputs)[2], tf.shape(inputs)[-1]))
+            x = x + tf.broadcast_to(self.b, (tf.shape(x)[1], tf.shape(x)[2], tf.shape(x)[-1]))
 
         # And activation
         if self.activation is not None:
-            x = self.activation(inputs)
+            x = self.activation(x)
 
         return x
 
@@ -280,5 +279,5 @@ class Deconvolution2D(AbstractDeconvolution):
         pass
 
 
-Deconv1D = Deconvolution1D
-Deconv2D = Deconvolution2D
+WienerDeconv1D = WienerDeconvolution1D
+WienerDeconv2D = WienerDeconvolution2D
