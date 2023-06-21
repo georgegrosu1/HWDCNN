@@ -82,25 +82,24 @@ def deconv2d(input_mat, filters, lambds):
     :return: The deconvolved image.
     """
 
-    # Transpose input matrices for propper form to apply FFT2D
+    # Transpose input matrices for proper form to apply FFT2D
     input_mat = tf.transpose(input_mat, perm=[0, 3, 1, 2])
 
     # Complete possibly real input vector with zeros for imaginary parts
-    input_mat = real_to_complex_tensor(input_mat)
-    filters = real_to_complex_tensor(filters)
+    # input_mat = real_to_complex_tensor(input_mat)
+    # filters = real_to_complex_tensor(filters)
 
-    # Generate the FFT of filter's transfer function and input matrixes
-    fft_filters = tf.signal.fft2d(filters)
-    fft_input = tf.signal.fft2d(input_mat)
+    # Generate the FFT of filter's transfer function and input matrices
+    fft_filters = tf.math.real(tf.signal.rfft2d(filters))
+    fft_input = tf.math.real(tf.signal.rfft2d(input_mat))
 
     # Compute simple Wiener deconvolution
-    input_snr = tf.reduce_mean(tf.abs(fft_input) ** 2) / lambds
+    input_snr = tf.reduce_mean(fft_input ** 2) / lambds
     input_snr = tf.broadcast_to(input_snr[:, None, None], (fft_filters.shape[0],
                                                            fft_filters.shape[1],
                                                            fft_filters.shape[2]))
 
-    g_right_hand = (1 / (1 + 1 / ((tf.math.real(fft_filters) ** 2) * input_snr)))
-    g_right_hand = tf.cast(g_right_hand, tf.complex64)
+    g_right_hand = (1 / (1 + 1 / ((fft_filters ** 2) * input_snr)))
 
     g_freq_domain = (1 / fft_filters) * g_right_hand
 
@@ -110,7 +109,7 @@ def deconv2d(input_mat, filters, lambds):
                                                        tf.shape(x_est_freq_domain)[3],
                                                        tf.shape(x_est_freq_domain)[4]))
 
-    deconvolved = tf.math.real(tf.signal.ifft2d(x_est_freq_domain))
+    deconvolved = tf.math.real(tf.signal.irfft2d(tf.cast(x_est_freq_domain, tf.complex64)))
 
     # Make back to conventional shape of (batch, height, width, channels)
     deconvolved = tf.transpose(deconvolved, perm=(0, 2, 3, 1))
@@ -120,9 +119,9 @@ def deconv2d(input_mat, filters, lambds):
 
 @tf.function
 def denoise_tv_chambolle_nd(image, weights, max_num_iter=200, regularization_term=1e-6):
-    """Perform total-variation denoising on n-dimensional images based on Rudin, Osher and Fatemi algorithm..
+    """Perform Chambolle total-variation denoising on n-channels images based on Rudin, Osher and Fatemi algorithm.
     ----------
-    :param image : ndarray; n-D input data to be denoised.
+    :param image : ndarray; Image or batch of images of form (batch, height, width, channels) input data to be denoised.
     :param weights: 1D tensor with the weights for each channel; Denoising weight. The greater `weight`, the more
     denoising (at the expense of fidelity to `input`).
     :param max_num_iter : int Maximal number of iterations used for the optimization.

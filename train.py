@@ -1,14 +1,14 @@
 import os
 import cv2
 import json
+import time
 import random
 import argparse
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import mixed_precision
 
 from pathlib import Path
-from models.deblurring_model import build_deblurring_model, build_unet_model, build_deblurring_second_model, build_autoencoder_model
+from models.deblurring_model import build_deblurring_second_model
 from processing import TFImageGenerator
 
 
@@ -29,22 +29,24 @@ def get_abs_path(relative_path) -> Path:
     return final_path
 
 
-def get_saving_model_path(configs, model_name: str):
-    save_dir = get_abs_path(configs['train_cfg']['model_save_path']) / model_name
+def get_saving_model_path(configs, model_name: str, save_time: str = None):
+    if save_time is not None:
+        save_dir = get_abs_path(configs['train_cfg']['model_save_path']) / model_name / save_time
+    else:
+        save_dir = get_abs_path(configs['train_cfg']['model_save_path']) / model_name
     save_dir.mkdir(parents=True, exist_ok=True)
     model_name = model_name + '_epoch{epoch:02d}_vloss{val_loss:.2f}.hdf5'
     return save_dir / model_name
 
 
 def get_x_y_paths(configs, mode='train'):
-    x_path = get_abs_path(configs['train_cfg']['dataset_root']) / mode / 'x_set_17_std-2p4'
-    y_path = get_abs_path(configs['train_cfg']['dataset_root']) / mode / 'y_set'
+    x_path = get_abs_path(configs['train_cfg']['dataset_root']) / mode / configs['train_cfg']['input_data_dir']
+    y_path = get_abs_path(configs['train_cfg']['dataset_root']) / mode / configs['train_cfg']['target_data_dir']
 
     return x_path, y_path
 
 
 def train_dcnn(json_cfg, model_name, use_pretrained=False):
-
     x_train_path, y_train_path = get_x_y_paths(json_cfg, 'train')
     x_val_path, y_val_path = get_x_y_paths(json_cfg, 'test')
 
@@ -73,9 +75,10 @@ def train_dcnn(json_cfg, model_name, use_pretrained=False):
 
     reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.3, patience=3, min_lr=0.0000001)
 
-    tf_board = tf.keras.callbacks.TensorBoard(log_dir=f'logdir/{model_name}',
+    log_time = time.ctime().replace(':', '_').replace(' ', '-')
+    tf_board = tf.keras.callbacks.TensorBoard(log_dir=f'logdir/{log_time}/{model_name}',
                                               histogram_freq=0, write_graph=True, write_images=True)
-    checkpoint_filepath = get_saving_model_path(json_cfg, model_name)
+    checkpoint_filepath = get_saving_model_path(json_cfg, model_name, log_time)
     model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
         filepath=checkpoint_filepath,
         save_weights_only=False,
@@ -99,11 +102,7 @@ def init_training(config_path, model_name):
 
 
 def main():
-
     seed_everything()
-
-    # policy = mixed_precision.Policy('mixed_float16')
-    # mixed_precision.set_global_policy(policy)
 
     args_parser = argparse.ArgumentParser(description='Training script for WDCNN')
     args_parser.add_argument('--config_path', '-c', type=str, help='Path to config file',

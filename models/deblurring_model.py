@@ -276,8 +276,8 @@ def build_deblurring_second_model(input_shape,
         x_in = inputs
 
     # First downscale branch
-    tvdeconv_1 = TVDeconv2D(150, 'channel', activation='relu')(x_in)
-    x_in_1_down = tf.keras.layers.Conv2D(filters=32, kernel_size=2, strides=(1, 1))(tvdeconv_1)
+    x_in_1_down = TVDeconv2D(150, 'channel', activation='relu')(x_in)
+    x_in_1_down = tf.keras.layers.Conv2D(filters=32, kernel_size=2, strides=(1, 1))(x_in_1_down)
     x_in_1_down = tf.keras.layers.Normalization()(x_in_1_down)
     x_in_1_down = tf.keras.layers.ReLU()(x_in_1_down)
     x_in_1_down = tf.keras.layers.MaxPooling2D(pool_size=(2, 2), strides=(1, 1), padding='same')(x_in_1_down)
@@ -328,8 +328,8 @@ def build_deblurring_second_model(input_shape,
     # x_in_3d_down = Deconv2D(filters=1, kernel_size=input_shape, padding=((0, 0), (0, 0)))(x_in_3d_down)
 
     # Fourth downscale branch
-    # tvdeconv_4 = TVDeconv2D(150, 'unit')(x_in)
-    x_in_4_down = tf.keras.layers.Conv2D(filters=32, kernel_size=8, strides=(1, 1))(x_in)
+    x_in_4_down = TVDeconv2D(150, 'unit')(x_in)
+    x_in_4_down = tf.keras.layers.Conv2D(filters=32, kernel_size=8, strides=(1, 1))(x_in_4_down)
     x_in_4_down = tf.keras.layers.Normalization()(x_in_4_down)
     x_in_4_down = tf.keras.layers.ReLU()(x_in_4_down)
     # x_in_4_down = tf.keras.layers.MaxPooling2D(pool_size=(8, 8), strides=(1, 1), padding='same')(x_in_4_down)
